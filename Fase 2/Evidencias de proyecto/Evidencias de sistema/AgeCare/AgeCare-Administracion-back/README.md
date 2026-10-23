@@ -1,6 +1,6 @@
 # AgeCare — Admin API
 
-## Instrucciones de arranque, seguir al pie de la letra...
+## Instrucciones de arranque, seguir al pie de la letra, para el docente...
 
 Para utilizar la consola usaremos docker, crear siguiente archivo .env a la misma altura de docker-compose.yml.
 # Entorno
@@ -64,7 +64,8 @@ Después del primer login, el admin deberá configurar MFA y guardar sus código
 
 arrancar fronted, instrucciones estan ahi.
 ///////////////////////////////////////////////////////////
-
+## hasta aqui termina, lo demas informacion de ayuda para los desarrolladores.
+//////////////////////////////////////////////////////////
 
 ## Arranque rápido (Docker)
 
