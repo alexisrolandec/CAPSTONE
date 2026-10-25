@@ -1,51 +1,58 @@
 # AgeCare — Admin API
+Sugerencias:
+- En este proceso utilizaremos "Docker" y "Google Authenticator" en un smartphone.
 
-## Instrucciones de arranque, seguir al pie de la letra, para el docente...
-para levantar la api tener instalado docker y google authenticator
+- Antes de comenzar el paso a paso, es recomendable haber levantado "front". Para esto revisar el paso a paso que se encuentra
+en el archivo README.md dentro de la carpeta "AgeCare-Administracion-front".
 
-Para utilizar la consola usaremos docker, 
-1. abrir docker
-2. crear archivo .env dentro de la misma carpeta donde se encuentra docker-compose.yml.
-3. copiar y pegar en .env el siguiente codigo:
-# Entorno
+- Se recomienda utilizar Visual Studio Code como entorno ya que este tutorial está enfocado en este mismo.
+
+## Instrucciones de arranque
+ 
+1. Abrir programa Docker (Dejar activo = Engine Running)
+
+2. Crear archivo con nombre ".env" (sin las comillas) dentro de la carpeta raíz (AgeCare-Administracion-back)
+
+3. Abrir el archivo .env y añadir las siguientes variables de entorno:
+
 ADMIN_ENVIRONMENT=dev
-# Conexión con la consola: sin barra / al final
+
 ADMIN_ALLOWS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000
 ADMIN_FRONTEND_URL=http://localhost:5173
-# PostgreSQL: Docker Compose configura la conexión interna del contenedor
+
 ADMIN_DATABASE_URL=postgresql+asyncpg://agecare:agecare@localhost:5432/agecare_admin
-# El Compose actual utiliza su propio JWT de desarrollo
+
 ADMIN_JWT_SECRET=solo-para-desarrollo
-# Cuentas iniciales: solo se crean si no existe ninguna cuenta
+
 ADMIN_BOOTSTRAP_DEV_ACCOUNTS=true
 ADMIN_ALLOWED_EMAIL_DOMAINS=wellq.co.uk,wellq.co,gmail.com
-# Seguridad
-ADMIN_ENCRYPTION_KEY=PEGAR_CLAVE_FERNET
+
+ADMIN_ENCRYPTION_KEY=
 ADMIN_MFA_REQUIRED_ROLES=admin,analyst,support,editor,moderator
 
-4. Ejecutar desde la terminal "docker compose build api" para construir la imagen de la api. 
+4. Abrir una nueva terminal y ejecutar sl siguiente comando: "docker compose build api" (sin las comillas). Este comando creará la imagen API
 
-4.1 Ejecutar esto en la misma terminal: docker compose run --rm --no-deps api python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+5. Una vez se haya creado la imagen, ejecutar el siguiente comando dentro de la misma terminal: "docker compose run --rm --no-deps api python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" (sin las comillas)
  
-Se generara una clave, esa clave ingresarla en archivo .env en ADMIN_ENCRYPTION_KEY, esto permite tener mfa.
+Después de haber ejecutado el comando anterior se generara una clave que se mostrará en la terminal. Esta clave debemos ingresarla dentro del archivo ".env" como valor de la variable de entorno "ADMIN_ENCRYPTION_KEY"
+Ejemplo: ADMIN_ENCRYPTION_KEY=td3FPIXYhMvKe7KZYOeTChUlApK_CHOh5n3CYc-J9dE=
+*RECORDAR GUARDAR LOS CAMBIOS*
 
-5. ejecutar docker compose up -d --build api y la api estara lista.
+6. Desde la terminal activa, ejecutar el siguiente comando: "docker compose up -d --build api" (sin las comillas).
 
-6. volver a vista frontend
+7. Una vez se haya levantado con éxito, debemos pasar a la vista del front (abrir página web).
 
-## IMPORTANTE
+8. Para ingresar a la plataforma es necesario iniciar con alguna cuenta activa, para esto usar las siguientes credenciales:
+Usuario= admin@wellq.co.uk
+Password= Admin123!
 
-para iniciar la consola y utilizarla es necesario iniciar con alguna cuenta activa, usar : USer=admin@wellq.co.uk , Password=Admin123!
+*La primera vez que hagamos log In, se mostrará un código QR.*
 
+9. En este paso se deberá escanear este código utlilizando la herramienta de Google Authenticator.
+*Se recomienda guardar los códigos de recuperación*
 
-
-
-
-Después del primer login, el admin deberá configurar MFA y guardar sus códigos de recuperación.
-
-arrancar fronted, instrucciones estan ahi.
 ///////////////////////////////////////////////////////////
-## hasta aqui termina, lo demas informacion de ayuda para los desarrolladores.
+## Tutorial finalizado. La siguiente etapa puede ser de utilidad en etapas posteriores.
 //////////////////////////////////////////////////////////
 
 ## Arranque rápido (Docker)
@@ -82,7 +89,7 @@ Configura ADMIN_DATABASE_URL y las demás variables necesarias antes de ejecutar
 
 (El administrador demo debe configurar MFA al primer acceso. Primero configura `ADMIN_ENCRYPTION_KEY` según la guía enlazada más abajo.)
 
-## Probar con curl
+## Probar con CURL
 
 ```bash
 BASE=http://localhost:8000/api/v1/admin
