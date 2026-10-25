@@ -1,64 +1,45 @@
 # AgeCare — Admin API
 
 ## Instrucciones de arranque, seguir al pie de la letra, para el docente...
+para levantar la api tener instalado docker y google authenticator
 
-Para utilizar la consola usaremos docker, crear siguiente archivo .env a la misma altura de docker-compose.yml.
+Para utilizar la consola usaremos docker, 
+1. abrir docker
+2. crear archivo .env dentro de la misma carpeta donde se encuentra docker-compose.yml.
+3. copiar y pegar en .env el siguiente codigo:
 # Entorno
 ADMIN_ENVIRONMENT=dev
-
 # Conexión con la consola: sin barra / al final
 ADMIN_ALLOWS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000
 ADMIN_FRONTEND_URL=http://localhost:5173
-
 # PostgreSQL: Docker Compose configura la conexión interna del contenedor
 ADMIN_DATABASE_URL=postgresql+asyncpg://agecare:agecare@localhost:5432/agecare_admin
-
 # El Compose actual utiliza su propio JWT de desarrollo
 ADMIN_JWT_SECRET=solo-para-desarrollo
-
 # Cuentas iniciales: solo se crean si no existe ninguna cuenta
 ADMIN_BOOTSTRAP_DEV_ACCOUNTS=true
 ADMIN_ALLOWED_EMAIL_DOMAINS=wellq.co.uk,wellq.co,gmail.com
-
 # Seguridad
 ADMIN_ENCRYPTION_KEY=PEGAR_CLAVE_FERNET
 ADMIN_MFA_REQUIRED_ROLES=admin,analyst,support,editor,moderator
-ADMIN_INVITATION_HOURS=24
 
-# Correo Gmail: necesario para enviar invitaciones
-ADMIN_SMTP_HOST=smtp.gmail.com
-ADMIN_SMTP_PORT=587
-ADMIN_SMTP_SECURITY=starttls
-ADMIN_SMTP_USERNAME=CORREO_REMITENTE@gmail.com
-ADMIN_SMTP_PASSWORD=CONTRASENA_DE_APLICACION
-ADMIN_MAIL_FROM=CORREO_REMITENTE@gmail.com
-ADMIN_MAIL_WORKER_ENABLED=true
+4. Ejecutar desde la terminal "docker compose build api" para construir la imagen de la api. 
 
-ADMIN_CONTENT_WORKER_ENABLED=false
-ADMIN_GEMINI_FREE_TIER_CONFIRMED=false
+4.1 Ejecutar esto en la misma terminal: docker compose run --rm --no-deps api python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+ 
+Se generara una clave, esa clave ingresarla en archivo .env en ADMIN_ENCRYPTION_KEY, esto permite tener mfa.
 
+5. ejecutar docker compose up -d --build api y la api estara lista.
+
+6. volver a vista frontend
 
 ## IMPORTANTE
 
-
-para iniciar la consola y utilizarla es necesario inicial con alguna cuenta activa, usar : USer=admin@wellq.co.uk , Password=Admin123!
-como utilizaremos smpt de gmail, es necesario conseguir una clave, se deja los siguientes pasos para conseguirla.
-
-1.Iniciar sesión con el Gmail que enviará las invitaciones.
-2.Activar la verificación en dos pasos de esa cuenta; Google la exige para crear contraseñas de aplicación. Ayuda oficial.
-Entrar en Contraseñas de aplicación.
-3.Escribir un nombre, por ejemplo AgeCare desarrollo, y pulsar Crear.
-4.Copiar la contraseña generada al .env, sin espacios:
+para iniciar la consola y utilizarla es necesario iniciar con alguna cuenta activa, usar : USer=admin@wellq.co.uk , Password=Admin123!
 
 
-Ejecutar docker compose build api para construir la imagen de la api, luego
-Ejecutar esto 
-## docker compose run --rm --no-deps api python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 
-dara una clave al final, esa clave usar en ADMIN_ENCRYPTION_KEY, esto permite tener mfa, mas abajo estan las credenciales de admin.
-LUego ejecutar docker compose up -d --build api y la api estara lista.
 
-Encaso de que se hayan ejecutado todos esos comandos, y desea actualizar .env, necesitara ejecutar el siguiente comando de docker 
-docker compose up -d --force-recreate api
+
 
 Después del primer login, el admin deberá configurar MFA y guardar sus códigos de recuperación.
 
