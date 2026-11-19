@@ -4,6 +4,8 @@ export interface RouteMeta {
 }
 
 export const VIEW_META: Record<string, RouteMeta> = {
+  pagos: { title: 'Pagos y suscripciones', crumb: 'Operación · Gestión de suscripciones y cobros' },
+  'usuarios-app': { title: 'Cuentas y adultos mayores', crumb: 'Operación · Directorio de la aplicación' },
   perfil: { title: 'Mi perfil', crumb: 'Mi cuenta · Datos y permisos' },
   seguridad: { title: 'Seguridad de mi cuenta', crumb: 'Mi cuenta · Autenticador y códigos de recuperación' },
   cuentas: { title: 'Cuentas de la consola', crumb: 'Sistema · Administración de accesos y roles' },

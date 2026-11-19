@@ -1,0 +1,11 @@
+.env
+content_audio/
+.env.*
+!.env.example
+venv/
+.venv/
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+backups/

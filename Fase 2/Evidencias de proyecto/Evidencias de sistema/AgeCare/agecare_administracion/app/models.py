@@ -1,0 +1,659 @@
+"""Modelos SQLAlchemy de la consola de administración.
+
+Convenciones: PK UUID, timestamps con zona horaria, JSON portable
+(JSONB en PostgreSQL, JSON en SQLite para los tests).
+"""
+import uuid
+from datetime import date, datetime
+
+from sqlalchemy import (JSON, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Integer,
+                        String, Text, UniqueConstraint, Uuid, func, Index)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.database import Base
+
+PortableJSON = JSON().with_variant(JSONB(), "postgresql")
+
+
+def pk() -> Mapped[uuid.UUID]:
+    return mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+
+
+def ts_now() -> Mapped[datetime]:
+    return mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ============ Staff ============
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+    id: Mapped[uuid.UUID] = pk()
+    full_name: Mapped[str] = mapped_column(String(120))
+    email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)  # null = pendiente de activación
+    role: Mapped[str] = mapped_column(String(20))  # enum AdminRole
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    mfa_secret: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    mfa_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    mfa_last_step: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    auth_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    recovery_hashes: Mapped[list | None] = mapped_column(PortableJSON, nullable=True)
+    invitation_cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    invitation_delivery_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    failed_attempt_times: Mapped[list | None] = mapped_column(PortableJSON, nullable=True)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    invitation_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = ts_now()
+
+
+class AdminSession(Base):
+    """Refresh tokens rotatorios (hash SHA-256)."""
+    __tablename__ = "admin_sessions"
+    id: Mapped[uuid.UUID] = pk()
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admin_users.id"), index=True)
+    refresh_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rotated_to: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = ts_now()
+    mfa_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    auth_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class AdminInvitation(Base):
+    __tablename__ = "admin_invitations"
+    id: Mapped[uuid.UUID] = pk()
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admin_users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    secret_encrypted: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = ts_now()
+
+
+class InvitationEmail(Base):
+    __tablename__ = "invitation_emails"
+    id: Mapped[uuid.UUID] = pk()
+    invitation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admin_invitations.id", ondelete="CASCADE"), index=True)
+    payload_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = ts_now()
+
+
+class MfaEnrollment(Base):
+    __tablename__ = "mfa_enrollments"
+    id: Mapped[uuid.UUID] = pk()
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admin_users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    secret_encrypted: Mapped[str] = mapped_column(String(512))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AdminPasswordReset(Base):
+    __tablename__ = 'admin_password_resets'
+    id: Mapped[uuid.UUID] = pk()
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('admin_users.id', ondelete='CASCADE'), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    auth_version: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    payload_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default='queued')
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = ts_now()
+
+
+class AdminMfaRecovery(Base):
+    __tablename__ = 'admin_mfa_recoveries'
+    id: Mapped[uuid.UUID] = pk()
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('admin_users.id', ondelete='CASCADE'), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    auth_version: Mapped[int] = mapped_column(Integer)
+    email_encrypted: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(20), default='awaiting_email')
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    decided_by_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    decision_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = ts_now()
+
+
+class MfaRecoveryEmail(Base):
+    __tablename__ = 'mfa_recovery_emails'
+    id: Mapped[uuid.UUID] = pk()
+    recovery_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('admin_mfa_recoveries.id', ondelete='CASCADE'), index=True)
+    recipient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('admin_users.id', ondelete='CASCADE'), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    payload_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default='queued')
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = ts_now()
+
+
+class AuditLog(Base):
+    """Registro inmutable (solo INSERT a nivel de permisos de BD)."""
+    __tablename__ = "audit_log"
+    id: Mapped[uuid.UUID] = pk()
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, index=True, nullable=True)
+    actor_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    actor_role: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    action: Mapped[str] = mapped_column(String(60), index=True)
+    entity_type: Mapped[str | None] = mapped_column(String(40), index=True, nullable=True)
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, index=True, nullable=True)
+    before: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
+    after: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
+    event_metadata: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+# ============ Directorio de demostración (sin autenticación móvil) ============
+class AppAccount(Base):
+    """Directorio ficticio, SIN credenciales/sesiones ni identidad móvil canónica."""
+    __tablename__ = 'app_accounts'
+    id: Mapped[uuid.UUID] = pk()
+    full_name: Mapped[str] = mapped_column(String(120))
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default='true')
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deactivated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    deactivation_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = ts_now()
+
+
+class AppPatient(Base):
+    __tablename__ = 'app_patients'
+    id: Mapped[uuid.UUID] = pk()
+    full_name: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = ts_now()
+
+
+class AppMembership(Base):
+    __tablename__ = 'app_memberships'
+    __table_args__ = (UniqueConstraint('patient_id', 'user_id', name='uq_app_patient_user'),
+                     CheckConstraint("role IN ('family', 'caregiver', 'elder', 'doctor')", name='ck_app_member_role'))
+    id: Mapped[uuid.UUID] = pk()
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('app_patients.id', ondelete='RESTRICT'), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('app_accounts.id', ondelete='RESTRICT'), index=True)
+    role: Mapped[str] = mapped_column(String(20))
+    is_owner: Mapped[bool] = mapped_column(Boolean, default=False, server_default='false')
+
+
+# ============ Métricas comerciales (agregadas por jobs) ============
+class MetricsDailyUsers(Base):
+    __tablename__ = "metrics_daily_users"
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    data_origin: Mapped[str] = mapped_column(String(12), default='unknown', server_default='unknown')
+    signups: Mapped[int] = mapped_column(Integer, default=0)
+    cancellations: Mapped[int] = mapped_column(Integer, default=0)
+    downloads: Mapped[int] = mapped_column(Integer, default=0)
+    active_users_eod: Mapped[int] = mapped_column(Integer, default=0)   # MAU al cierre del día
+    paying_users_eod: Mapped[int] = mapped_column(Integer, default=0)
+    mrr_clp_eod: Mapped[int] = mapped_column(Integer, default=0)
+    computed_at: Mapped[datetime] = ts_now()
+
+
+class MetricsHourlyUsers(Base):
+    """Solo para el periodo `today` (refresco horario)."""
+    __tablename__ = "metrics_hourly_users"
+    id: Mapped[uuid.UUID] = pk()
+    data_origin: Mapped[str] = mapped_column(String(12), default='unknown', server_default='unknown')
+    ts_hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), unique=True, index=True)
+    bucket_minutes: Mapped[int] = mapped_column(Integer, default=60, server_default='60')
+    signups: Mapped[int] = mapped_column(Integer, default=0)
+    cancellations: Mapped[int] = mapped_column(Integer, default=0)
+    computed_at: Mapped[datetime] = ts_now()
+
+
+class MetricsPlanSnapshot(Base):
+    # Regla comercial común: precios mensuales por cuenta. Conservar los valores del corte.
+    __tablename__ = "metrics_plan_snapshot"
+    id: Mapped[uuid.UUID] = pk()
+    data_origin: Mapped[str] = mapped_column(String(12), default='unknown', server_default='unknown')
+    as_of: Mapped[date] = mapped_column(Date, index=True)
+    plan_code: Mapped[str] = mapped_column(String(12))  # enum PlanCode
+    users: Mapped[int] = mapped_column(Integer)
+    price_clp: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mrr_clp: Mapped[int] = mapped_column(Integer, default=0)
+    monthly_churn: Mapped[float] = mapped_column(Float, default=0.0)
+    computed_at: Mapped[datetime] = ts_now()
+    __table_args__ = (UniqueConstraint("as_of", "plan_code"),)
+
+
+# ============ Perfiles y adopción (ventanas precalculadas) ============
+class RoleActivityWindow(Base):
+    """Resumen por perfil para ventanas de 7/30/90 días (job diario)."""
+    __tablename__ = "role_activity_window"
+    id: Mapped[uuid.UUID] = pk()
+    days_window: Mapped[int] = mapped_column(Integer, index=True)  # 7 | 30 | 90
+    role: Mapped[str] = mapped_column(String(12))  # enum AppRole
+    active_users: Mapped[int] = mapped_column(Integer)
+    growth_8w: Mapped[float] = mapped_column(Float, default=0.0)
+    sessions_per_week: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_session_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    retention_30d: Mapped[float] = mapped_column(Float, default=0.0)
+    computed_at: Mapped[datetime] = ts_now()
+    __table_args__ = (UniqueConstraint("days_window", "role"),)
+
+
+class RoleWeeklyActive(Base):
+    __tablename__ = "role_weekly_active"
+    id: Mapped[uuid.UUID] = pk()
+    week_start: Mapped[date] = mapped_column(Date, index=True)  # lunes ISO
+    role: Mapped[str] = mapped_column(String(12))
+    active_users: Mapped[int] = mapped_column(Integer)
+    computed_at: Mapped[datetime] = ts_now()
+    __table_args__ = (UniqueConstraint("week_start", "role"),)
+
+
+class Feature(Base):
+    """Catálogo de funcionalidades (se administra por seed/migración, no por API)."""
+    __tablename__ = "features"
+    feature_key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    applicable_roles: Mapped[list] = mapped_column(PortableJSON)  # list[AppRole]
+    expected_low: Mapped[bool] = mapped_column(Boolean, default=False)
+    note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class FeatureUsageWindow(Base):
+    """Adopción por función/rol/ventana, precalculada por el job diario."""
+    __tablename__ = "feature_usage_window"
+    id: Mapped[uuid.UUID] = pk()
+    days_window: Mapped[int] = mapped_column(Integer, index=True)
+    feature_key: Mapped[str] = mapped_column(ForeignKey("features.feature_key"), index=True)
+    role: Mapped[str] = mapped_column(String(12))
+    users: Mapped[int] = mapped_column(Integer)  # usuarios únicos que usaron la función
+    computed_at: Mapped[datetime] = ts_now()
+    __table_args__ = (UniqueConstraint("days_window", "feature_key", "role"),)
+
+
+# ============ Estado operativo ============
+class OpsObservation(Base):
+    """Una medición real, sin ruta, identidad, cuerpo ni credenciales HTTP."""
+    __tablename__ = 'ops_observations'
+    id: Mapped[uuid.UUID] = pk()
+    component_key: Mapped[str] = mapped_column(String(30), index=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    duration_ms: Mapped[float] = mapped_column(Float)
+    success: Mapped[bool] = mapped_column(Boolean)
+    source: Mapped[str] = mapped_column(String(24))
+    failure_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    __table_args__ = (
+        CheckConstraint("component_key IN ('api_core', 'auth', 'database')", name='ck_ops_observation_component'),
+        Index('ix_ops_observations_component_time', 'component_key', 'observed_at', 'id'),
+        CheckConstraint('duration_ms >= 0', name='ck_ops_observation_duration'),
+        CheckConstraint("source IN ('http_requests', 'database_probe')", name='ck_ops_observation_source'),
+    )
+
+
+class ComponentState(Base):
+    """Última foto recibida; el recolector real aún no está integrado."""
+    __tablename__ = "ops_component_state"
+    data_origin: Mapped[str] = mapped_column(String(12), default='unknown', server_default='unknown')
+    key: Mapped[str] = mapped_column(String(30), primary_key=True)  # enum ComponentKey
+    status: Mapped[str] = mapped_column(String(15))  # enum ComponentStatus
+    uptime_30d: Mapped[float] = mapped_column(Float, default=1.0)
+    latency_p50_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_p95_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    checked_at: Mapped[datetime] = ts_now()
+
+
+class LatencyWindow(Base):
+    """Percentiles recibidos por ventana; no implica un recolector conectado."""
+    __tablename__ = "ops_latency_window"
+    data_origin: Mapped[str] = mapped_column(String(12), default='unknown', server_default='unknown')
+    id: Mapped[uuid.UUID] = pk()
+    window: Mapped[str] = mapped_column(String(4), index=True)  # 1h | 24h | 7d
+    component_key: Mapped[str] = mapped_column(String(30))
+    p50_ms: Mapped[int] = mapped_column(Integer)
+    p95_ms: Mapped[int] = mapped_column(Integer)
+    sample_count: Mapped[int] = mapped_column(Integer)
+    computed_at: Mapped[datetime] = ts_now()
+    __table_args__ = (UniqueConstraint("window", "component_key"),)
+
+
+class CriticalProcessState(Base):
+    __tablename__ = "ops_critical_process_state"
+    data_origin: Mapped[str] = mapped_column(String(12), default='unknown', server_default='unknown')
+    execution_kind: Mapped[str] = mapped_column(String(12), default='unknown', server_default='unknown')
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    chain: Mapped[str] = mapped_column(String(300))
+    p95_seconds: Mapped[float] = mapped_column(Float)
+    success_24h: Mapped[float] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(15))
+    computed_at: Mapped[datetime] = ts_now()
+
+
+class Incident(Base):
+    __tablename__ = "ops_incidents"
+    notification_status: Mapped[str] = mapped_column(String(20), default='not_configured', server_default='not_configured')
+    id: Mapped[uuid.UUID] = pk()
+    title: Mapped[str] = mapped_column(String(160))
+    component_key: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    severity: Mapped[str] = mapped_column(String(15))  # degraded | outage
+    status: Mapped[str] = mapped_column(String(15), index=True)  # enum IncidentStatus
+    description: Mapped[str] = mapped_column(Text)
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_maintenance: Mapped[bool] = mapped_column(Boolean, default=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = ts_now()
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+
+
+class IncidentEmail(Base):
+    __tablename__ = 'ops_incident_emails'
+    id: Mapped[uuid.UUID] = pk()
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('ops_incidents.id', ondelete='CASCADE'), index=True)
+    payload_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default='queued', index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = ts_now()
+
+
+# ============ Soporte ============
+class Ticket(Base):
+    __tablename__ = "support_tickets"
+    id: Mapped[uuid.UUID] = pk()
+    number: Mapped[int] = mapped_column(Integer, unique=True, index=True, autoincrement=True)
+    subject: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text)
+    requester_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    requester_name: Mapped[str] = mapped_column(String(120))
+    requester_email: Mapped[str] = mapped_column(String(254), index=True)
+    requester_role: Mapped[str | None] = mapped_column(String(12), nullable=True)  # enum AppRole
+    requester_plan: Mapped[str | None] = mapped_column(String(12), nullable=True)  # enum PlanCode
+    category: Mapped[str] = mapped_column(String(20), index=True)
+    priority: Mapped[str] = mapped_column(String(10), index=True)
+    status: Mapped[str] = mapped_column(String(15), index=True)
+    channel: Mapped[str] = mapped_column(String(10), default="app")
+    assigned_to: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admin_users.id"), nullable=True)
+    first_response_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    csat_score: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1–5
+    csat_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requester_context: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+    assignee: Mapped[AdminUser | None] = relationship(lazy="joined")
+    replies: Mapped[list["TicketReply"]] = relationship(back_populates="ticket", lazy="noload")
+
+
+class TicketReply(Base):
+    __tablename__ = "support_ticket_replies"
+    id: Mapped[uuid.UUID] = pk()
+    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("support_tickets.id"), index=True)
+    author_type: Mapped[str] = mapped_column(String(10))  # admin | user | system
+    author_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    author_name: Mapped[str] = mapped_column(String(120))
+    body: Mapped[str] = mapped_column(Text)
+    internal: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    ticket: Mapped[Ticket] = relationship(back_populates="replies")
+
+
+# ============ Contenido, marketplace y moderación ============
+class ContentItem(Base):
+    __tablename__ = "content_items"
+    id: Mapped[uuid.UUID] = pk()
+    type: Mapped[str] = mapped_column(String(10), index=True)  # enum ContentType
+    title: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str] = mapped_column(Text)
+    tags: Mapped[list] = mapped_column(PortableJSON, default=list)
+    status: Mapped[str] = mapped_column(String(12), index=True, default="draft")
+    tts_ready: Mapped[bool] = mapped_column(Boolean, default=False)
+    text_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    audio_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    audio_file: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    audio_status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
+    audio_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    source_candidate_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    provenance: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
+    approved_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    reviewed_by_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    publish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    schedule_audio_exception: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    created_by_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = ts_now()
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+
+
+class NewsCandidate(Base):
+    __tablename__ = "news_candidates"
+    __table_args__ = (UniqueConstraint("source", "external_id"),)
+    id: Mapped[uuid.UUID] = pk()
+    source: Mapped[str] = mapped_column(String(80))
+    external_id: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(Text)
+    original_text: Mapped[str] = mapped_column(Text)
+    source_url: Mapped[str] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    source_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_modified: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_hash: Mapped[str] = mapped_column(String(64))
+    source_changed: Mapped[bool] = mapped_column(Boolean, default=False)
+    rights_status: Mapped[str] = mapped_column(String(20), default="uncertain")
+    rights_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    classification: Mapped[str | None] = mapped_column(Text, nullable=True)
+    editorial_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    adaptation: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
+    item_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = ts_now()
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ContentJob(Base):
+    __tablename__ = "content_jobs"
+    id: Mapped[uuid.UUID] = pk()
+    kind: Mapped[str] = mapped_column(String(16))  # collect | adapt | tts | tts_retry
+    target_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now().astimezone())
+    created_at: Mapped[datetime] = ts_now()
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    actor_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
+class ContentControl(Base):
+    __tablename__ = "content_control"
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    data: Mapped[dict] = mapped_column(PortableJSON, default=dict)
+
+
+class CaregiverProfile(Base):
+    __tablename__ = "marketplace_caregivers"
+    id: Mapped[uuid.UUID] = pk()
+    name: Mapped[str] = mapped_column(String(120))
+    email: Mapped[str] = mapped_column(String(254))
+    zone: Mapped[str] = mapped_column(String(80), index=True)
+    specialties: Mapped[list] = mapped_column(PortableJSON, default=list)
+    languages: Mapped[list] = mapped_column(PortableJSON, default=list)
+    certifications_count: Mapped[int] = mapped_column(Integer, default=0)
+    certifications_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    rating_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reviews_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(12), index=True, default="pending")
+    status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    internal_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime] = ts_now()
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    reviewed_by_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
+class Product(Base):
+    __tablename__ = "marketplace_products"
+    id: Mapped[uuid.UUID] = pk()
+    name: Mapped[str] = mapped_column(String(160))
+    category: Mapped[str] = mapped_column(String(60), index=True)
+    vendor: Mapped[str] = mapped_column(String(120))
+    price_clp: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    external_url: Mapped[str] = mapped_column(String(500))
+    image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(12), index=True, default="draft")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+
+
+class ModerationItem(Base):
+    __tablename__ = "moderation_queue"
+    id: Mapped[uuid.UUID] = pk()
+    type: Mapped[str] = mapped_column(String(20), index=True)  # enum ModerationItemType
+    content: Mapped[dict] = mapped_column(PortableJSON)
+    author_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    author_name: Mapped[str] = mapped_column(String(120))
+    author_role: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    reported_by: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
+    report_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    is_safety: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(10), index=True, default="pending")
+    reject_reason_code: Mapped[str | None] = mapped_column(String(15), nullable=True)
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    decided_by_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+# ============ Suscripciones y cobros de presentación ============
+class PaymentSubscription(Base):
+    __tablename__ = 'payment_subscriptions'
+    __table_args__ = (CheckConstraint('price >= 0 AND version >= 1', name='ck_payment_subscription_values'),
+        CheckConstraint("state IN ('active','past_due','cancelled')", name='ck_payment_subscription_state'))
+    id: Mapped[uuid.UUID] = pk()
+    code: Mapped[str] = mapped_column(String(24), unique=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('app_accounts.id'), unique=True)
+    plan: Mapped[str] = mapped_column(String(24))
+    price: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(16))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    history: Mapped[list] = mapped_column(PortableJSON, default=list)
+    data_origin: Mapped[str] = mapped_column(String(12), default='demo')
+
+
+class PaymentCharge(Base):
+    __tablename__ = 'payment_charges'
+    __table_args__ = (CheckConstraint('amount > 0 AND version >= 1', name='ck_payment_charge_values'),
+        CheckConstraint("state IN ('approved','pending','failed','refunded')", name='ck_payment_charge_state'))
+    id: Mapped[uuid.UUID] = pk()
+    code: Mapped[str] = mapped_column(String(24), unique=True)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('payment_subscriptions.id'), index=True)
+    amount: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(16))
+    charged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    history: Mapped[list] = mapped_column(PortableJSON, default=list)
+    data_origin: Mapped[str] = mapped_column(String(12), default='demo')
+
+
+# ============ Configuración y legales ============
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[dict | list | int | str | None] = mapped_column(PortableJSON)
+    value_schema: Mapped[dict] = mapped_column(PortableJSON)  # JSON Schema del valor
+    description: Mapped[str] = mapped_column(String(300))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    updated_by_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LegalVersion(Base):
+    __tablename__ = "legal_versions"
+    id: Mapped[uuid.UUID] = pk()
+    doc_type: Mapped[str] = mapped_column(String(10), index=True)  # terms | privacy
+    semver: Mapped[str] = mapped_column(String(10))
+    content_md: Mapped[str] = mapped_column(Text)
+    changelog: Mapped[str] = mapped_column(Text)
+    effective_date: Mapped[date] = mapped_column(Date)
+    requires_reacceptance: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(10), default="draft")  # draft | published
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    created_by_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = ts_now()
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+    __table_args__ = (UniqueConstraint("doc_type", "semver"),)
+
+# ---- Juegos ----- #
+from sqlalchemy import Column, String, Boolean, Text, DateTime, Integer, func
+from uuid import UUID
+
+class GameApp(Base):
+    """Catálogo de juegos y apps que se ofrecen al adulto mayor.
+ 
+    `is_active` significa "visible ahora mismo en la app del adulto mayor".
+    El administrador lo usa para rotar qué se juega cada día, de forma global
+    (la misma selección para todos los pacientes).
+    """
+    __tablename__ = "games_apps"
+ 
+    id: Mapped[uuid.UUID] = pk()
+ 
+    # Identidad
+    slug: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(150))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    item_type: Mapped[str] = mapped_column(String(20), index=True, default="game")  # game | app
+    category: Mapped[str] = mapped_column(String(80), index=True)
+ 
+    # Dirección de ejecución
+    target_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+ 
+    # Publicación
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    featured: Mapped[bool] = mapped_column(Boolean, default=False)
+    min_tier: Mapped[str] = mapped_column(String(50), default="gratuito")
+ 
+    # Auditoría y borrado lógico
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    created_by_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    updated_by_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = ts_now()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+from app import analytics_models  # noqa: E402,F401: metadata común de analítica

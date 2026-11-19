@@ -4,7 +4,7 @@ export const CONTENT_TYPES: Record<string, string> = {
 };
 
 export const AUDIO_STATES: Record<string, string> = {
-  pending: 'Pendiente de revisión', queued: 'En cola', waiting_quota: 'Esperando cuota gratuita',
+  pending: 'Pendiente de revisión', queued: 'Preparando audio', waiting_quota: 'Esperando cuota gratuita',
   ready: 'Disponible', failed: 'Generación fallida',
 };
 export const CONTENT_ERRORS: Record<string, string> = {
@@ -14,6 +14,7 @@ export const CONTENT_ERRORS: Record<string, string> = {
   QUOTA_REACHED: 'Cuota agotada; el trabajo espera al siguiente periodo',
   INVALID_AI_OUTPUT: 'La respuesta de la IA no cumple el formato; permite un nuevo intento',
   INVALID_AUDIO_OUTPUT: 'El proveedor no devolvió audio válido',
+  AUDIO_CONTENT_BLOCKED: 'Gemini detuvo la lectura por sus filtros de contenido. Revisa el texto antes de volver a intentarlo',
   AUDIO_STORAGE_ERROR: 'No se pudo guardar el audio en el servidor',
   PUBLICATION_WAITING_AUDIO: 'La fecha programada llegó; la publicación espera audio vigente',
   INVALID_SOURCE_RESPONSE: 'La fuente devolvió una respuesta no válida',

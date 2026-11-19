@@ -13,6 +13,8 @@ export interface ContentItem {
   tags: string[];
   body: string;
   publish_at: string | null;
+  scheduled_without_audio?: boolean;
+  scheduled_audio_exception_reason?: string | null;
   published_at: string | null;
   audio_status: string;
   audio_error: string | null;
@@ -59,14 +61,31 @@ export async function createContent(payload: { type: string; title: string; body
   if (!response.ok) throw new Error(await parseErrorMessage(response, 'No fue posible crear el contenido.'));
 }
 
-export async function updateContent(contentId: string, payload: { title: string; body: string; tags: string[]; publish_at?: string | null }): Promise<void> {
+export async function updateContent(contentId: string, payload: { title?: string; body?: string; tags?: string[]; publish_at?: string | null }): Promise<ContentItem> {
   const response = await apiFetch(`/content/items/${contentId}`, { method: 'PATCH', body: JSON.stringify(payload) });
   if (!response.ok) throw new Error(await parseErrorMessage(response, 'No fue posible guardar el contenido.'));
+  return response.json();
 }
 
 export async function changeContentPublication(contentId: string, unpublish: boolean): Promise<void> {
   const response = await apiFetch(`/content/items/${contentId}/${unpublish ? 'unpublish' : 'publish'}`, { method: 'POST' });
   if (!response.ok) throw new Error(await parseErrorMessage(response, 'No fue posible cambiar el estado.'));
+}
+
+export async function publishContentWithoutAudio(contentId: string, version: number, reason: string, reviewConfirmed: boolean): Promise<ContentItem> {
+  const response = await apiFetch(`/content/items/${contentId}/publish-without-audio`, {
+    method: 'POST', body: JSON.stringify({ version, reason, review_confirmed: reviewConfirmed }),
+  });
+  if (!response.ok) throw new Error(await parseErrorMessage(response, 'No fue posible publicar sin audio.'));
+  return response.json();
+}
+
+export async function scheduleContentWithoutAudio(contentId: string, version: number, reason: string, reviewConfirmed: boolean, publishAt: string): Promise<ContentItem> {
+  const response = await apiFetch(`/content/items/${contentId}/schedule-without-audio`, {
+    method: 'POST', body: JSON.stringify({ version, reason, review_confirmed: reviewConfirmed, publish_at: publishAt }),
+  });
+  if (!response.ok) throw new Error(await parseErrorMessage(response, 'No fue posible programar sin audio.'));
+  return response.json();
 }
 
 export async function deleteContent(contentId: string): Promise<void> {
@@ -101,10 +120,19 @@ async function editorialRequest<T>(path: string, body?: object): Promise<T> {
   if (!response.ok) throw new Error(await parseErrorMessage(response, 'No se pudo completar la solicitud editorial.'));
   return response.json();
 }
-export const fetchCandidates = (page: number) => editorialRequest<{ items: NewsCandidate[]; total: number }>(`candidates?page=${page}`);
+export const fetchCandidates = (page: number, hasDraft?: boolean) => editorialRequest<{ items: NewsCandidate[]; total: number }>(`candidates?page=${page}${hasDraft === undefined ? '' : `&has_draft=${hasDraft}`}`);
 export const fetchEditorialJobs = () => editorialRequest<{ items: EditorialJob[] }>('jobs');
-export const fetchEditorialRuntime = () => editorialRequest<{ worker_enabled: boolean; gemini_ready: boolean }>('runtime');
+export const fetchEditorialRuntime = () => editorialRequest<{ worker_enabled: boolean; gemini_ready: boolean; collection_enabled?: boolean; adaptation_enabled?: boolean }>('runtime');
 export const requestCollection = () => editorialRequest('collect', {});
+export interface NewsImportResult { candidates: number; duplicates: number; changed: number }
+export async function importNewsFile(file: File): Promise<NewsImportResult> {
+  if (file.size > 2 * 1024 * 1024) throw new Error('El archivo no puede superar 2 MB.');
+  let posts: unknown;
+  try { posts = JSON.parse((await file.text()).replace(/^\uFEFF/, '')); }
+  catch { throw new Error('No es un archivo JSON válido. Guarda la respuesta de la API de noticias, no la página HTML.'); }
+  if (!Array.isArray(posts) || !posts.length || posts.length > 100) throw new Error('El archivo debe contener entre 1 y 100 noticias.');
+  return editorialRequest<NewsImportResult>('candidates/import', posts);
+}
 export const requestAdaptation = (id: string) => editorialRequest(`candidates/${id}/adapt`, {});
 export const reviewCandidate = (id: string, action: string, note: string, source_hash: string) => editorialRequest(`candidates/${id}/review`, { action, note, source_hash });
-export const createCandidateDraft = (id: string, title: string, body: string) => editorialRequest(`candidates/${id}/draft`, { title, body });
+export const createCandidateDraft = (id: string, title: string, body: string) => editorialRequest<ContentItem>(`candidates/${id}/draft`, { title, body });

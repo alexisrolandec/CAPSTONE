@@ -6,8 +6,11 @@ const ts = require('typescript');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 let user, pathname;
+let isAuthenticated = true;
+let logout = () => {};
 function load(path, dependencies = {}) {
-  const context = { exports: {}, require: name => dependencies[name] ?? require(name) };
+  const context = { exports: {}, require: name => dependencies[name]
+    ?? (name === '../components/MfaRecoveryBadge' ? { MfaRecoveryBadge: () => null } : require(name)) };
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(path, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   }).outputText, context);
@@ -15,7 +18,8 @@ function load(path, dependencies = {}) {
 }
 const permissions = load('src/routes/permissions.ts');
 const dependencies = {
-  '../auth/AuthContext': { useAuth: () => ({ user, isAuthenticated: true, isRestoring: false, logout: () => {} }) },
+  '../lib/staffMeta': load('src/lib/staffMeta.ts'),
+  '../auth/AuthContext': { useAuth: () => ({ user, isAuthenticated, isRestoring: false, logout }) },
   '../routes/permissions': permissions,
   'react-router-dom': {
     useLocation: () => ({ pathname }),
@@ -26,16 +30,57 @@ const dependencies = {
 const { Sidebar } = load('src/layout/Sidebar.tsx', dependencies);
 const { ProtectedRoute } = load('src/layout/ProtectedRoute.tsx', dependencies);
 const roles = {
-  admin: ['metrics', 'games', 'ops', 'support', 'content', 'marketplace', 'moderation', 'settings', 'legal', 'staff', 'audit'],
+  admin: ['metrics', 'games', 'ops', 'support', 'content', 'marketplace', 'moderation', 'settings', 'legal', 'staff', 'audit', 'end_users'],
   analyst: ['metrics', 'games', 'ops', 'support'],
   support: ['metrics', 'games', 'ops', 'support'],
   editor: ['games', 'content', 'marketplace'],
   moderator: ['games', 'marketplace', 'moderation'],
 };
+
+test('Cerrar sesión ejecuta el cierre desde el botón y la ruta protegida vuelve al login', () => {
+  user = { role: 'admin', full_name: 'Prueba', permissions: ['games'] };
+  let calls = 0;
+  logout = async () => { calls++; isAuthenticated = false; user = null; };
+  function findButton(element) {
+    if (!element || typeof element !== 'object') return null;
+    if (element.type === 'button' && element.props.children === 'Cerrar sesión') return element;
+    for (const child of React.Children.toArray(element.props?.children)) {
+      const found = findButton(child);
+      if (found) return found;
+    }
+    return null;
+  }
+  try {
+    const button = findButton(Sidebar());
+    assert.ok(button, 'botón visible');
+    button.props.onClick();
+    assert.equal(calls, 1);
+    assert.ok(renderToStaticMarkup(React.createElement(ProtectedRoute, null, 'PRIVADO'))
+      .includes('data-redirect="/login"'));
+  } finally {
+    logout = () => {};
+    isAuthenticated = true;
+  }
+});
+
+test('RF03: tras expirar la sesión una ruta protegida dirige al login y no muestra su contenido', () => {
+  isAuthenticated = false;
+  user = null;
+  pathname = '/juegos';
+  try {
+    const route = renderToStaticMarkup(React.createElement(ProtectedRoute, null, 'CONTENIDO PROTEGIDO'));
+    assert.ok(route.includes('data-redirect="/login"'));
+    assert.ok(!route.includes('CONTENIDO PROTEGIDO'));
+  } finally {
+    isAuthenticated = true;
+  }
+});
 test('el menú renderizado y el acceso directo a rutas respetan los cinco perfiles', () => {
   for (const [role, modules] of Object.entries(roles)) {
     user = { role, full_name: 'Cuenta de prueba', permissions: modules };
     const menu = renderToStaticMarkup(React.createElement(Sidebar));
+    assert.ok(menu.includes(`class="sf-role">${dependencies['../lib/staffMeta'].STAFF_ROLES[role]}</div>`));
+    assert.ok(!menu.includes('Wellq Co'));
     assert.equal(menu.includes('>Sistema</div>'), role === 'admin', `${role}: grupo Sistema`);
     assert.ok(menu.includes('aria-label="Mi cuenta"'), `${role}: navegación personal`);
     assert.ok(menu.indexOf('href="/perfil"') > menu.indexOf('class="sidebar-foot"'));

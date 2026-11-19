@@ -1,4 +1,7 @@
 import { createSessionClient } from '../lib/sessionClient';
+import { activityFetch, type ActivityRequestInit } from '../lib/requestActivity';
+
+export const publicFetch = activityFetch;
 
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1/admin';
@@ -29,8 +32,8 @@ export function clearSession(): void {
 
 const session = createSessionClient(API_BASE_URL, () => {}, () => {
   window.dispatchEvent(new Event('agecare-session-expired'));
-});
+}, activityFetch);
 
-export const apiFetch = session.request;
+export const apiFetch = (path: string, options?: ActivityRequestInit) => session.request(path, options);
 export const ensureFreshSession = session.ensureFresh;
 export const logoutSession = session.logout;

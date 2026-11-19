@@ -1,13 +1,14 @@
-import { API_BASE_URL, apiFetch } from './client';
+import { API_BASE_URL, apiFetch, publicFetch } from './client';
+import type { ActivityRequestInit } from '../lib/requestActivity';
 
 export interface MfaSetup { secret: string | null; qr_data_url: string | null; mfa_required?: boolean }
 export interface RecoveryResult { recovery_codes: string[]; mfa_enabled?: boolean }
 export interface InvitationInfo { full_name: string; email: string; role: string; mfa_required: boolean; expires_at: string }
 export interface StaffPolicy { mfa_required_roles: string[]; allowed_email_domains: string[]; invitation_hours: number }
 
-export async function accessRequest<T>(path: string, body?: unknown, authenticated = false, signal?: AbortSignal): Promise<T> {
-  const options: RequestInit = { method: body === undefined ? 'GET' : 'POST', signal, cache: 'no-store', headers: { 'Content-Type': 'application/json' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) };
-  const response = authenticated ? await apiFetch(path, options) : await fetch(`${API_BASE_URL}${path}`, options);
+export async function accessRequest<T>(path: string, body?: unknown, authenticated = false, signal?: AbortSignal, background = false): Promise<T> {
+  const options: ActivityRequestInit = { method: body === undefined ? 'GET' : 'POST', signal, cache: 'no-store', headers: { 'Content-Type': 'application/json' }, ...(background ? { background: true } : {}), ...(body !== undefined ? { body: JSON.stringify(body) } : {}) };
+  const response = authenticated ? await apiFetch(path, options) : await publicFetch(`${API_BASE_URL}${path}`, options);
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new Error(data?.error?.message || 'No se pudo completar la operación. Revisa los datos e intenta nuevamente.');
   return data;
@@ -20,3 +21,5 @@ export const confirmEnrollment = (token: string, otp_code: string) => accessRequ
 export const resendInvitation = (id: string) => accessRequest(`/users/${id}/invitation/resend`, {}, true);
 export const cancelInvitation = (id: string) => accessRequest(`/users/${id}/invitation/cancel`, {}, true);
 export const fetchStaffPolicy = (signal?: AbortSignal) => accessRequest<StaffPolicy>('/users/policy', undefined, true, signal);
+export const requestPasswordReset = (email: string) => accessRequest<{ message: string }>('/auth/password-reset/request', { email });
+export const confirmPasswordReset = (token: string, password: string) => accessRequest<{ changed: boolean }>('/auth/password-reset/confirm', { token, password });

@@ -9,19 +9,23 @@ export interface Caregiver {
   specialties: string[];
   languages: string[];
   certifications_count: number;
+  certifications_verified?: boolean;
   reviews_count: number;
   rating_avg: number | null;
   status: CaregiverStatus;
   submitted_at: string;
+  internal_note?: string | null;
 }
 
 export interface CaregiversListResponse {
   items: Caregiver[];
   total: number;
   page: number;
+  page_size?: number;
 }
 
 export interface CaregiverListParams {
+  page?: number;
   search?: string;
   status?: string;
 }
@@ -36,7 +40,7 @@ async function parseErrorMessage(response: Response, fallback: string): Promise<
 }
 
 export async function fetchCaregivers(params: CaregiverListParams): Promise<CaregiversListResponse> {
-  const query = new URLSearchParams({ page: '1', page_size: '25' });
+  const query = new URLSearchParams({ page: String(params.page ?? 1), page_size: '25' });
   if (params.search) query.set('q', params.search);
   if (params.status) query.set('status', params.status);
   const response = await apiFetch(`/marketplace/caregivers?${query}`);
@@ -44,9 +48,17 @@ export async function fetchCaregivers(params: CaregiverListParams): Promise<Care
   return response.json();
 }
 
-export async function updateCaregiverStatus(caregiverId: string, status: CaregiverStatus): Promise<void> {
+export async function updateCaregiverStatus(caregiverId: string, status: CaregiverStatus, reason?: string): Promise<void> {
   const payload: { status: CaregiverStatus; reason?: string } = { status };
-  if (status === 'suspended') payload.reason = 'Perfil suspendido durante la revisión administrativa.';
+  if (status === 'suspended') payload.reason = reason ?? 'Perfil suspendido durante la revisión administrativa.';
   const response = await apiFetch(`/marketplace/caregivers/${caregiverId}`, { method: 'PATCH', body: JSON.stringify(payload) });
   if (!response.ok) throw new Error(await parseErrorMessage(response, 'No fue posible actualizar el perfil.'));
+}
+
+export async function updateCaregiverNote(caregiverId: string, internalNote: string): Promise<Caregiver> {
+  const response = await apiFetch(`/marketplace/caregivers/${caregiverId}`, {
+    method: 'PATCH', body: JSON.stringify({ internal_note: internalNote }),
+  });
+  if (!response.ok) throw new Error(await parseErrorMessage(response, 'No fue posible guardar la nota interna.'));
+  return response.json();
 }

@@ -1,145 +1,130 @@
-import { useEffect, useState } from 'react';
-import {
-  fetchFeatureAdoption,
-  fetchFeatureAlerts,
-  fetchTopFeatures,
-  type FeatureAdoption,
-  type FeatureAlerts,
-  type TopFeatures,
-} from '../../api/features';
-import { PeriodSelector } from '../../components/PeriodSelector';
+import { useAutoFilters } from '../../hooks/useAutoFilters';
+import { useCallback, useState } from 'react';
+import { useAnalyticsRemote as useRemote } from '../../hooks/useAnalyticsRemote';
+import type { ActivityRequestInit } from '../../lib/requestActivity';
+import { fetchFeatureAdoption, fetchFeatureAlerts, fetchTopFeatures } from '../../api/features';
 import { FEATURE_ROLE_COLORS, featureRoleName } from '../../lib/featureRoleMeta';
 import { percent } from '../../lib/format';
+import { adoptionPercent } from '../../lib/featureCalculationMeta';
+import { usersSupportDate } from '../../lib/usersSupportMeta';
 import { HeatmapLegend } from './HeatmapLegend';
 import { HeatmapTable } from './HeatmapTable';
+import { FeatureAlertList } from './FeatureAlertList';
 
-const PERIODS = [
-  { key: 7, label: 'Últimos 7 días' },
-  { key: 30, label: 'Últimos 30 días' },
-  { key: 90, label: 'Últimos 90 días' },
-] as const;
-
+const PERIODS = [{ key: 7, label: 'Últimos 7 días' }, { key: 30, label: 'Últimos 30 días' }, { key: 90, label: 'Últimos 90 días' }] as const;
 export function FuncionalPage() {
+  const [section, setSection] = useState('comparison');
   const [days, setDays] = useState<number>(30);
-  const [adoption, setAdoption] = useState<FeatureAdoption | null>(null);
-  const [top, setTop] = useState<TopFeatures | null>(null);
-  const [alerts, setAlerts] = useState<FeatureAlerts | null>(null);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    setError('');
-    Promise.all([fetchFeatureAdoption(days), fetchTopFeatures(days), fetchFeatureAlerts(days)])
-      .then(([adoptionData, topData, alertsData]) => {
-        if (cancelled) return;
-        setAdoption(adoptionData);
-        setTop(topData);
-        setAlerts(alertsData);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'No fue posible cargar el uso por funcionalidad.');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [days]);
-
-  return (
-    <>
-      <div className="filter-row">
-        <span className="filter-label">Periodo</span>
-        <PeriodSelector periods={PERIODS} value={days} onChange={setDays} />
+  const [limit, setLimit] = useState(1);
+  const thresholdFilter = useAutoFilters({ value: '15' }, { delayedKeys: ['value'], validate: row => row.value.trim() && Number.isFinite(Number(row.value)) && Number(row.value) >= 1 && Number(row.value) <= 50 ? '' : 'Introduce un porcentaje entre 1 y 50.' });
+  const threshold = Number(thresholdFilter.filters.value) / 100;
+  const [reload, setReload] = useState(0);
+  const adoptionLoad = useCallback((options?: ActivityRequestInit) => fetchFeatureAdoption(days, options), [days]);
+  const topLoad = useCallback((options?: ActivityRequestInit) => fetchTopFeatures(days, limit, options), [days, limit]);
+  const alertsLoad = useCallback((options?: ActivityRequestInit) => fetchFeatureAlerts(days, threshold, options), [days, threshold]);
+  const adoptionState = useRemote(`adoption:${days}:${reload}`, adoptionLoad);
+  const topState = useRemote(`top:${days}:${limit}:${reload}`, topLoad);
+  const alertsState = useRemote(`alerts:${days}:${threshold}:${reload}`, alertsLoad);
+  const adoption = adoptionState.data, top = topState.data, alerts = alertsState.data;
+  return <div className="tw:space-y-7 tw:text-base tw:leading-relaxed tw:text-ink">
+    <header className="tw:flex tw:flex-wrap tw:items-start tw:justify-between tw:gap-5">
+      <div><p className="tw:mb-2 tw:text-xs tw:font-bold tw:tracking-widest tw:text-brand-ink tw:uppercase">Analítica de la aplicación</p>
+        <h1 className="tw:text-2xl tw:font-bold tw:sm:text-3xl">Uso por funcionalidad</h1>
+        <p className={description}>Descubre qué funciones utiliza cada perfil de la app móvil y cuáles conviene revisar.</p>
       </div>
-
-      <div className="grid" style={{ gridTemplateColumns: '1.5fr 1fr' }}>
-        <div className="card">
-          <div className="card-head">
-            <div>
-              <div className="card-title">Adopción de funcionalidades por perfil</div>
-              <div className="card-sub">
-                {adoption
-                  ? `% de usuarios activos del perfil que usaron la función · últimos ${adoption.days} días`
-                  : '% de usuarios activos del perfil que usaron la función · últimos 30 días'}
-              </div>
-            </div>
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            {error && error}
-            {!error && !adoption && 'Cargando adopción...'}
-            {adoption && <HeatmapTable data={adoption} />}
-          </div>
-          {adoption && <HeatmapLegend />}
+      <button className={button} type="button" onClick={() => setReload(value => value+1)}><span aria-hidden="true">↻ </span>Actualizar vista</button>
+    </header>
+    <div className={`${panel} tw:flex tw:flex-wrap tw:items-center tw:justify-between tw:gap-5`}>
+      <div><h2 className="tw:font-semibold">Período de consulta</h2><p className="tw:mt-1 tw:text-muted">Se aplica a la comparación, al ranking y a los avisos de uso bajo.</p></div>
+      <label className={label}>Mostrar actividad de
+        <select className={field} aria-label="Período de consulta" value={days} onChange={event => setDays(Number(event.target.value))}>
+          {PERIODS.map(period => <option key={period.key} value={period.key}>{period.label}</option>)}
+        </select>
+      </label>
+    </div>
+    <p className={notice}><strong>Qué significa adopción:</strong> porcentaje de usuarios activos de cada perfil que usaron una función en el mismo período. Por ejemplo, 40 % significa que 40 de cada 100 usuarios activos la utilizaron.</p>
+    <div className="tw:flex tw:flex-wrap tw:gap-3"><button type="button" className={button} onClick={() => { setDays(30); setLimit(1); thresholdFilter.reset(); }}>Restablecer filtros</button></div>
+    <nav aria-label="Secciones de uso por funcionalidad" className="section-tabs tw:flex tw:flex-wrap tw:gap-2 tw:rounded-2xl tw:bg-canvas tw:p-2">
+      {[['comparison', 'Comparar por perfil'], ['ranking', 'Más utilizadas'], ['alerts', 'Uso bajo']].map(([key, title]) => <button
+        key={key} type="button" aria-pressed={section === key} aria-controls={`features-${key}`} onClick={() => setSection(key)}
+        className={button}>{title}</button>)}
+    </nav>
+    <div id="features-comparison" hidden={section !== 'comparison'}>
+    <section className={panel} aria-label="Adopción de funcionalidades por perfil" aria-busy={!adoption && !adoptionState.error}>
+      <h2 className={heading}>Adopción de funcionalidades por perfil</h2>
+      <p className={description}>Cada fila representa una función y cada columna, un perfil. Compara los porcentajes para conocer su alcance.</p>
+      {adoptionState.error && <p role="alert" className={notice}>{adoptionState.error}</p>}
+      {!adoption && !adoptionState.error && <p role="status" className={notice}>Cargando adopción...</p>}
+      {adoption && <>
+        <p className="tw:my-4 tw:font-semibold tw:text-brand-ink">Últimos {adoption.days} días</p>
+        {adoption.features.some(feature => !feature.calculation_details) && <p role="status" className={notice}>El estado del cálculo no está disponible en esta respuesta; los porcentajes recibidos no permiten distinguir todos los casos.</p>}
+        <div className="tw:my-5 tw:overflow-x-auto tw:rounded-xl tw:border tw:border-solid tw:border-stroke"><HeatmapTable data={adoption} /></div>
+        {!!adoption.features.length && !!adoption.roles.length && <HeatmapLegend statesAvailable={adoption.features.every(feature => !!feature.calculation_details)} />}
+        <Updated value={adoption.computed_at} through={adoption.data_through} />
+      </>}
+    </section>
+    </div>
+    <div id="features-ranking" hidden={section !== 'ranking'}>
+      <section className={panel} aria-label="Más utilizadas por perfil" aria-busy={!top && !topState.error}>
+        <div className="tw:flex tw:flex-wrap tw:items-start tw:justify-between tw:gap-5">
+        <div><h2 className={heading}>Más utilizadas por perfil</h2><p className={description}>Consulta las funciones con mayor porcentaje de uso dentro de cada perfil.</p></div>
+        <label className={`${label} tw:max-w-sm`}>Cuántas funciones ver por perfil <select className={field} value={limit} onChange={event => setLimit(Number(event.target.value))}>
+          {[1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{value === 1 ? 'La más utilizada' : `Las ${value} más utilizadas`}</option>)}
+        </select><span className="tw:text-sm tw:font-normal tw:text-muted">Por ejemplo, elige 3 para ver hasta tres funciones en cada perfil. No cambia los porcentajes de uso.</span></label></div>
+        {topState.error && <p role="alert" className={notice}>{topState.error}</p>}
+        {!top && !topState.error && <p role="status" className={notice}>Cargando ranking...</p>}
+        {top && top.calculable_only !== true && <p role="status" className={notice}>No se puede verificar si este ranking excluye resultados no calculables. Actualiza la API para consultar el ranking validado.</p>}
+        {top?.calculable_only === true && <>
+          <p className={notice}>Últimos {days} días · Hasta {limit} {limit === 1 ? 'función por perfil, la más utilizada' : 'funciones por perfil, de mayor a menor uso'}. Solo se incluyen porcentajes calculables; un 0 % válido también puede aparecer.</p>
+          {!top.top_by_role.length && <p>Sin datos de funcionalidades por perfil.</p>}
+          <div className="tw:grid tw:gap-5 tw:lg:grid-cols-2">{top.top_by_role.map(item => <div key={item.role} className="tw:rounded-xl tw:border tw:border-solid tw:border-stroke tw:bg-canvas tw:p-5">
+            <h3 className="tw:mb-5 tw:flex tw:items-center tw:gap-3 tw:text-lg tw:font-semibold"><span aria-hidden="true" className="tw:h-3 tw:w-3 tw:rounded-full" style={{ background: FEATURE_ROLE_COLORS[item.role] ?? 'var(--ink)' }} />{featureRoleName(item.role)}</h3>
+            {!item.features.length ? <p className="tw:text-muted">Sin resultados de adopción para este perfil.</p> : <ol className="tw:space-y-5">
+              {item.features.map((feature, index) => <li key={feature.feature_key}>
+                <div className="tw:flex tw:items-start tw:gap-3"><span className="tw:font-bold tw:text-muted" aria-label={`Posición ${index+1}`}>{index+1}.</span>
+                  <span className="tw:font-semibold">{feature.name}: {feature.adoption == null ? 'Sin datos' : adoptionPercent(feature.adoption)}</span></div>
+                {feature.adoption != null && <div aria-hidden="true" className="tw:mt-2 tw:h-2 tw:overflow-hidden tw:rounded-full tw:bg-panel"><div className="tw:h-full tw:rounded-full" style={{ width: `${Math.max(0, Math.min(100, feature.adoption * 100))}%`, backgroundColor: FEATURE_ROLE_COLORS[item.role] ?? 'var(--brand)' }} /></div>}
+              </li>)}
+            </ol>}
+          </div>)}</div>
+          <Updated value={top.computed_at} through={top.data_through} />
+        </>}
+      </section>
+    </div>
+    <div id="features-alerts" hidden={section !== 'alerts'}>
+      <section className={panel} aria-label="Alertas de uso bajo" aria-busy={!alerts && !alertsState.error}>
+        <h2 className={heading}>Alertas de uso bajo</h2>
+        <p className={description}>Encuentra funciones cuyo porcentaje de uso está por debajo del límite elegido. Estos avisos sirven para analizar el uso; no son alertas de salud.</p>
+        <div className="tw:my-5 tw:flex tw:flex-wrap tw:items-center tw:gap-4">
+          <label className={label}>Umbral de adopción (%)<input className={field} type="number" name="threshold" min={1} max={50} step="any" value={thresholdFilter.draft.value} onChange={event => thresholdFilter.setField('value', event.target.value)} required /><span className="tw:text-sm tw:font-normal tw:text-muted">Entre 1 y 50 %. Por ejemplo, 15 busca usos inferiores al 15 %.</span></label>
+          {thresholdFilter.error && <p role="alert" className={description}>{thresholdFilter.error}</p>}
         </div>
-
-        <div>
-          <div className="card">
-            <div className="card-head">
-              <div>
-                <div className="card-title">Más usadas por perfil</div>
-                <div className="card-sub">Función nº 1 de cada rol · ventana seleccionada</div>
-              </div>
-            </div>
-            <ul className="flag-list">
-              {!error && !top && <li>Cargando funcionalidades...</li>}
-              {error && <li>{error}</li>}
-              {top?.top_by_role.map(item => {
-                const feature = item.features[0];
-                if (!feature) {
-                  return (
-                    <li key={item.role}>
-                      <span className="fl-t">{featureRoleName(item.role)}</span>
-                      <div className="fl-s">Sin datos de adopción.</div>
-                    </li>
-                  );
-                }
-                return (
-                  <li key={item.role}>
-                    <span className="swatch" style={{ background: FEATURE_ROLE_COLORS[item.role], marginTop: 4 }} />
-                    <div>
-                      <div className="fl-t">
-                        {featureRoleName(item.role)} → {feature.name} ({percent(feature.adoption)})
-                      </div>
-                      <div className="fl-s">Mayor adopción registrada para este perfil en la ventana consultada.</div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-
-          <div className="card">
-            <div className="card-head">
-              <div>
-                <div className="card-title">Alertas de adopción</div>
-                <div className="card-sub">
-                  {alerts ? `Funciones infrautilizadas · umbral ${percent(alerts.threshold)}` : 'Funciones infrautilizadas · últimos 30 días'}
-                </div>
-              </div>
-            </div>
-            <ul className="flag-list">
-              {!error && !alerts && <li>Cargando alertas...</li>}
-              {error && <li>{error}</li>}
-              {alerts && alerts.alerts.length === 0 && <li>No hay alertas de adopción.</li>}
-              {alerts?.alerts.slice(0, 6).map((alert, index) => {
-                const values = alert.adoption.map(value => percent(value)).join(' / ');
-                const roles = alert.roles.map(role => featureRoleName(role)).join(' / ');
-                return (
-                  <li key={index}>
-                    <span className={`chip ${alert.expected_low ? 'neutral' : 'serious'}`}>▼ {values}</span>
-                    <div>
-                      <div className="fl-t">
-                        {alert.name} ({roles})
-                      </div>
-                      <div className="fl-s">{alert.note || 'Función con adopción inferior al umbral configurado.'}</div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        </div>
-      </div>
-    </>
-  );
+        {alertsState.error && <p role="alert" className={notice}>{alertsState.error}</p>}
+        {!alerts && !alertsState.error && <p role="status" className={notice}>Cargando alertas...</p>}
+        {alerts && alerts.calculable_only !== true && <p role="status" className={notice}>No se puede verificar si esta respuesta excluye porcentajes no calculables. Actualiza la API para consultar alertas validadas.</p>}
+        {alerts?.calculable_only === true && <>
+          <p className={notice}>Últimos {days} días · Por debajo de {percent(alerts.threshold)}</p>
+          <h3 className="tw:mb-4 tw:mt-6 tw:text-lg tw:font-semibold">Uso bajo a revisar</h3><FeatureAlertList alerts={alerts.alerts.filter(alert => !alert.expected_low)} expected={false} />
+          <h3 className="tw:mb-3 tw:mt-8 tw:text-lg tw:font-semibold">Uso bajo esperado</h3><p className={description}>Por ejemplo, una función de emergencia puede utilizarse poco sin que eso indique falta de adopción.</p>
+          <FeatureAlertList alerts={alerts.alerts.filter(alert => alert.expected_low)} expected />
+          <Updated value={alerts.computed_at} through={alerts.data_through} />
+        </>}
+      </section>
+    </div>
+  </div>;
 }
+
+function Updated({ value, through }: { value: string; through?: string | null }) {
+  return <p className="tw:mt-6 tw:flex tw:flex-wrap tw:gap-x-2 tw:gap-y-1 tw:border-t tw:border-solid tw:border-stroke tw:pt-4 tw:text-sm tw:text-muted">
+    {through && <span className="tw:basis-full">Actividad hasta el {through.split('-').reverse().join('/')} · Días completos.</span>}
+    Última actualización de los indicadores <strong className="tw:text-ink">{usersSupportDate(value)}</strong> <span>(hora de Santiago)</span>
+  </p>;
+}
+
+const panel = 'tw:rounded-2xl tw:border tw:border-solid tw:border-stroke tw:bg-panel tw:p-5 tw:sm:p-7';
+const heading = 'tw:text-xl tw:font-bold tw:tracking-tight';
+const description = 'tw:mt-2 tw:mb-4 tw:max-w-3xl tw:leading-relaxed tw:text-muted';
+const label = 'tw:grid tw:gap-2 tw:font-semibold';
+const field = 'tw:min-h-11 tw:w-full tw:rounded-xl tw:border tw:border-solid tw:border-stroke tw:bg-canvas tw:px-3 tw:py-2.5 tw:text-base tw:text-ink tw:sm:w-56 tw:focus-visible:outline-2 tw:focus-visible:outline-brand';
+const button = 'tw:min-h-11 tw:cursor-pointer tw:rounded-xl tw:border tw:border-solid tw:border-stroke tw:bg-panel tw:px-4 tw:py-2.5 tw:text-base tw:font-semibold tw:text-ink tw:hover:bg-canvas tw:focus-visible:outline-2 tw:focus-visible:outline-offset-2 tw:focus-visible:outline-brand';
+const notice = 'tw:my-4 tw:rounded-xl tw:bg-canvas tw:p-4 tw:leading-relaxed tw:text-muted';

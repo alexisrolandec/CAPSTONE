@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agecare
+      POSTGRES_PASSWORD: agecare
+      POSTGRES_DB: agecare_admin
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agecare -d agecare_admin"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    volumes:
+      - content_audio:/srv/app/content_audio
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ADMIN_DATABASE_URL: postgresql+asyncpg://agecare:agecare@db:5432/agecare_admin
+      ADMIN_JWT_SECRET: solo-para-desarrollo
+      # Solo desarrollo. Carga módulos vacíos sin borrar ni modificar registros.
+      ADMIN_SEED_DEMO_ENABLED: ${ADMIN_SEED_DEMO_ENABLED:-true}
+      ADMIN_END_USERS_DEMO_ENABLED: ${ADMIN_END_USERS_DEMO_ENABLED:-true}
+      # Demostración comercial autorizada; no crea datos de origen real.
+      ADMIN_COMMERCIAL_DEMO_REFRESH_ENABLED: ${ADMIN_COMMERCIAL_DEMO_REFRESH_ENABLED:-true}
+      # Requiere preparación explícita; solo actividad/adopción, hasta 24dic2026.
+      ADMIN_USAGE_DEMO_REFRESH_ENABLED: ${ADMIN_USAGE_DEMO_REFRESH_ENABLED:-true}
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m scripts.bootstrap_dev_accounts &&
+             python -m scripts.seed --only-empty &&
+             python -m scripts.run_api"
+
+volumes:
+  pgdata:
+  content_audio:

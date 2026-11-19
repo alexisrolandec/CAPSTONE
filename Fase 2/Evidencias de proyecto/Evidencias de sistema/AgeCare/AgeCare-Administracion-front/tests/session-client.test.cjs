@@ -7,7 +7,7 @@ const ts = require("typescript");
 const compiled = ts.transpileModule(fs.readFileSync("src/lib/sessionClient.ts", "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText;
-const context = { exports: {}, Headers, atob, Date, Promise, Error, JSON, fetch: (...args) => global.fetch(...args) };
+const context = { exports: {}, Headers, AbortSignal, atob, Date, Promise, Error, JSON, fetch: (...args) => global.fetch(...args) };
 vm.runInNewContext(compiled, context);
 const { createSessionClient } = context.exports;
 const access = (seconds) => `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + seconds })).toString("base64url")}.signature`;
@@ -61,6 +61,30 @@ test("refresh revocado elimina la sesión", async () => {
   assert.equal(expired, 1);
 });
 
+test("RF03: JWT aún vigente rechazado por cambio de rol intenta refresh y notifica expiración", async () => {
+  client.save(access(900), "refresh-del-rol-anterior");
+  const calls = [];
+  global.fetch = async (url) => {
+    calls.push(url);
+    return json({ error: { code: url.endsWith('/auth/refresh') ? 'INVALID_REFRESH' : 'UNAUTHORIZED' } }, 401);
+  };
+  const response = await client.request('/games-apps/');
+  assert.equal(response.status, 401);
+  assert.deepEqual(calls, ['http://api/games-apps/', 'http://api/auth/refresh']);
+  assert.equal(expired, 1);
+  assert.equal(storage.size, 0);
+});
+
+test("RF03: un 403 por falta de permisos conserva la sesión y no intenta renovar", async () => {
+  client.save(access(900), "refresh-valido");
+  const calls = [];
+  global.fetch = async (url) => { calls.push(url); return json({}, 403); };
+  assert.equal((await client.request('/settings')).status, 403);
+  assert.deepEqual(calls, ['http://api/settings']);
+  assert.equal(expired, 0);
+  assert.equal(storage.get('agecare_refresh_token'), 'refresh-valido');
+});
+
 test("error de red conserva credenciales y permite otro intento", async () => {
   client.save(access(-5), "refresh-old");
   global.fetch = async () => { throw new Error("offline"); };
@@ -90,4 +114,60 @@ test("una renovación pendiente no restaura una sesión cerrada", async () => {
   resolve(json({ access_token: access(900), refresh_token: "refresh-new" }));
   assert.equal(await pending, null);
   assert.equal(storage.size, 0);
+});
+
+test("logout elimina las credenciales antes de que responda el servidor", async () => {
+  client.save(access(900), "refresh-old");
+  let finish;
+  global.fetch = () => new Promise(resolve => { finish = resolve; });
+  const closing = client.logout();
+  assert.equal(storage.size, 0);
+  assert.equal(expired, 1);
+  assert.equal(await client.ensureFresh(), null);
+  finish(new Response(null, { status: 204 }));
+  await closing;
+});
+
+test("logout sin conexión deja cerrada la sesión local", async () => {
+  client.save(access(900), "refresh-old");
+  global.fetch = async () => { throw new Error("offline"); };
+  await assert.rejects(client.logout(), /offline/);
+  assert.equal(storage.size, 0);
+  assert.equal(expired, 1);
+});
+
+test("logout comparte la renovación pendiente y revoca su resultado sin restaurarlo", async () => {
+  client.save(access(-5), "refresh-old");
+  let finish, rotations = 0, revoked;
+  global.fetch = (url, options) => {
+    if (url.endsWith('/auth/refresh')) {
+      rotations++;
+      return new Promise(resolve => { finish = resolve; });
+    }
+    revoked = JSON.parse(options.body).refresh_token;
+    return Promise.resolve(new Response(null, { status: 204 }));
+  };
+  const renewal = client.ensureFresh();
+  const closing = client.logout();
+  assert.equal(storage.size, 0);
+  finish(json({ access_token: access(900), refresh_token: 'rotated' }));
+  assert.equal(await renewal, null);
+  await closing;
+  assert.equal(rotations, 1);
+  assert.equal(revoked, 'rotated');
+  assert.equal(storage.size, 0);
+});
+
+test("la respuesta de un logout anterior no borra un nuevo inicio de sesión", async () => {
+  client.save(access(900), "refresh-old");
+  let finish;
+  global.fetch = () => new Promise(resolve => { finish = resolve; });
+  const closing = client.logout();
+  const fresh = access(1800);
+  client.save(fresh, 'new-login');
+  finish(new Response(null, { status: 204 }));
+  await closing;
+  assert.equal(storage.get('agecare_access_token'), fresh);
+  assert.equal(storage.get('agecare_refresh_token'), 'new-login');
+  assert.equal(expired, 1);
 });

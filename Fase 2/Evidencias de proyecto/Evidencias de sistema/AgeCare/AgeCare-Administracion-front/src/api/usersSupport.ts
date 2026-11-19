@@ -1,4 +1,5 @@
 import { apiFetch } from './client';
+import type { ActivityRequestInit } from '../lib/requestActivity';
 
 export type RoleKey = 'family' | 'caregiver' | 'elder' | 'doctor';
 
@@ -12,15 +13,28 @@ export interface RoleSummaryItem {
 }
 
 export interface RolesSummary {
+  data_through?: string | null;
+  days: number;
+  computed_at: string;
   roles: RoleSummaryItem[];
 }
 
+export interface WeeklyPeriod {
+  start_date: string;
+  end_date: string;
+  is_current_week: boolean;
+}
+
 export interface RolesWeekly {
+  data_through?: string | null;
+  computed_at: string;
+  week_details?: WeeklyPeriod[];
   weeks: string[];
   series: { role: RoleKey; values: number[] }[];
 }
 
 export interface SupportSummary {
+  computed_at: string;
   open: number;
   in_progress: number;
   waiting_user: number;
@@ -39,6 +53,7 @@ export interface TicketCategory {
   category: string;
   name: string;
   count: number;
+  share: number;
 }
 
 export interface TicketsByCategory {
@@ -53,7 +68,7 @@ export type TicketPriority = 'low' | 'medium' | 'high' | 'critical';
 export interface TicketSummaryItem {
   number: number;
   subject: string;
-  requester: { role: RoleKey | string };
+  requester: { role: RoleKey | string | null };
   priority: TicketPriority;
   status: TicketStatus;
 }
@@ -62,14 +77,17 @@ export interface TicketsList {
   items: TicketSummaryItem[];
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const response = await apiFetch(path);
-  if (!response.ok) throw new Error('No fue posible cargar usuarios y soporte.');
+async function getJson<T>(path: string, options?: ActivityRequestInit): Promise<T> {
+  const response = await apiFetch(path, options);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.error?.message ?? 'No fue posible cargar usuarios y soporte.');
+  }
   return response.json() as Promise<T>;
 }
 
-export const fetchRolesSummary = () => getJson<RolesSummary>('/metrics/roles/summary?days=30');
-export const fetchRolesWeekly = () => getJson<RolesWeekly>('/metrics/roles/weekly-active?weeks=8');
-export const fetchSupportSummary = () => getJson<SupportSummary>('/support/summary');
-export const fetchTicketsByCategory = () => getJson<TicketsByCategory>('/support/tickets/by-category?days=30');
-export const fetchRecentTickets = () => getJson<TicketsList>('/support/tickets?page=1&page_size=6&order=-created_at');
+export const fetchRolesSummary = (days = 30, options?: ActivityRequestInit) => getJson<RolesSummary>(`/metrics/roles/summary?days=${encodeURIComponent(days)}`, options);
+export const fetchRolesWeekly = (weeks = 8, options?: ActivityRequestInit) => getJson<RolesWeekly>(`/metrics/roles/weekly-active?weeks=${encodeURIComponent(weeks)}`, options);
+export const fetchSupportSummary = (options?: ActivityRequestInit) => getJson<SupportSummary>('/support/summary', options);
+export const fetchTicketsByCategory = (days = 30, options?: ActivityRequestInit) => getJson<TicketsByCategory>(`/support/tickets/by-category?days=${encodeURIComponent(days)}`, options);
+export const fetchRecentTickets = (options?: ActivityRequestInit) => getJson<TicketsList>('/support/tickets?page=1&page_size=6&order=-created_at', options);

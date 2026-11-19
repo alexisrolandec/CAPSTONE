@@ -1,0 +1,244 @@
+# AgeCare — Admin API
+
+Despliegue Render/Neon: [guía de configuración y estado](docs/render-neon.md). Usar Dockerfile.render para la nube; el Dockerfile y Compose habituales siguen destinados al entorno local. El archivo .env.render es privado y nunca se sube al repositorio.
+
+Vista previa de juegos: [corrección para jugar dentro del iframe e instrucciones de integración](docs/diagnostico-vista-previa-juegos.md). Incorporar juntos game_static.py y disponibilidad.js; conserva bloqueo de juegos inactivos sin ampliar CORS administrativo. Sin migración ni nuevas claves.
+
+Fase 04: [contratos, cohortes, actualización y límites de analítica comercial](docs/analitica-comercial.md). Migración 0007 y worker local de cohortes; fuentes reales y unidad facturable de planes pendientes. Para aplicar el código actualizado en desarrollo, desde esta carpeta: `docker compose up -d --build api`. No borrar volúmenes.
+
+## Arranque con datos de demostración
+
+El Compose de desarrollo carga automáticamente ejemplos **solo en módulos vacíos**, mediante `scripts.seed --only-empty`. Si un módulo ya tiene datos, los conserva; no modifica contraseñas, MFA ni sesiones. Para levantar o actualizar: `docker compose up -d --build api`. Puede desactivarse con `ADMIN_SEED_DEMO_ENABLED=false` en `.env`. El comando manual sin `--only-empty` sigue siendo destructivo y no se usa en el arranque. [Condiciones por módulo y pruebas](docs/datos-demo-arranque.md).
+
+## Primer acceso en una instalación local nueva
+
+Para crear las cuatro cuentas iniciales de desarrollo sin borrar datos, configurar en el `.env` del backend `ADMIN_ENVIRONMENT=dev` y `ADMIN_BOOTSTRAP_DEV_ACCOUNTS=true`, conservar una `ADMIN_ENCRYPTION_KEY` válida y ejecutar `docker compose up -d --build api`. Solo actúa si no hay ninguna cuenta; no sobrescribe cuentas existentes. Admin entra primero a configurar su MFA. Ver [credenciales, pasos y alcance](docs/cuentas-iniciales-desarrollo.md). No usar estas credenciales públicas en producción.
+///////////////////////////////////////////////////////////
+# AgeCare — Guía simple de integración
+
+Esta guía explica los archivos que debe revisar el desarrollador para incorporar la administración de juegos y los juegos a la API de la app móvil.
+
+El backend está en `agecare back rolo/agecare_administracion`. Las rutas siguientes parten de esa carpeta.
+
+## 1. Models: qué se guarda
+
+Archivo: [app/models.py]
+Los modelos representan las tablas de la base de datos. Para juegos, buscar **`GameApp`**, que corresponde a la tabla **`games_apps`**.
+
+| Campo | Para qué sirve |
+|---|---|
+| `id` | Identificador UUID de la ficha. |
+| `slug` | Nombre único, por ejemplo `memorama`. |
+| `title`, `description`, `category` | Nombre, descripción y categoría. |
+| `item_type` | Distingue juego (`game`) de aplicación (`app`). |
+| `target_url` | Dirección que abre el juego. |
+| `is_active` | Indica si aparece en el catálogo activo. |
+| `min_tier`, `featured` | Plan asociado y marca de destacado. |
+| `created_at`, `updated_at` | Fechas de creación y modificación. |
+
+La tabla guarda la **ficha**; el HTML, CSS y JavaScript se guardan en archivos.
+
+**Para integrar:** incorporar `GameApp` utilizando la conexión y la base de modelos del backend receptor. Preparar una migración compatible con su base existente: copiar la clase no crea la tabla. El modelo conserva campos internos, como responsable del cambio, que no aparecen todos en la API.
+
+La migración `0006_simplify_games` retira los campos de imágenes, orden manual y metadatos de accesibilidad sin uso. Conserva las fichas y demás campos. Los estilos y controles accesibles de los juegos se mantienen.
+
+## 2. Schemas: qué datos acepta y devuelve
+
+Archivo: [app/schemas/games_apps.py]
+
+Los schemas validan los datos enviados y definen la respuesta. No crean tablas.
+
+| Clase | Para qué sirve |
+|---|---|
+| `GameAppBase` | Define los campos comunes y sus reglas. |
+| `GameAppCreate` | Recibe los datos para crear una ficha. |
+| `GameAppUpdate` | Recibe los campos que se quieren modificar; los no enviados se conservan. No permite cambiar `slug`. |
+| `GameAppOut` | Devuelve la ficha con su UUID y fechas. |
+
+Por ejemplo, el título debe tener entre 2 y 150 caracteres; `min_tier` admite `gratuito`, `dorado` o `platino`.
+
+**Para integrar:** incorporar estos schemas y mantener los nombres de campos para que la consola pueda seguir comunicándose con la API.
+
+## 3. Routers: qué operaciones permite
+
+Archivo: [app/routers/games_apps.py]
+
+El router recibe la solicitud, valida con el schema, comprueba permisos y consulta o modifica el modelo.
+
+Base actual: **`/api/v1/admin/games-apps`**.
+
+| Método y ruta | Función | Acceso |
+|---|---|---|
+| GET `/` | Listar fichas; filtros `item_type` e `is_active`. | Todos los roles internos autenticados. |
+| GET `/active` | Listar solo fichas activas. | Público actualmente. |
+| POST `/` | Crear ficha. | admin/editor. |
+| PUT `/{id}` | Editar los campos enviados. | admin/editor. |
+| POST `/{id}/toggle` | Activar o desactivar: invierte el estado. | admin/editor. |
+| DELETE `/{id}` | Eliminar permanentemente la ficha. | admin/editor. |
+
+Los listados devuelven un **array JSON directo**, sin paginación ni envoltorio `items`. Desactivar retira la ficha del listado activo, pero el HTML sigue público. Eliminar la ficha no elimina archivos. El plan `min_tier` no comprueba por sí mismo la suscripción del usuario.
+
+**Para integrar:** adaptar también las dependencias del router:
+
+| Archivo | Responsabilidad |
+|---|---|
+| `app/database.py` | Sesión de base de datos y transacciones con `get_db`. |
+| `app/deps.py` y `app/enums.py` | Autenticación y permisos con `require`. |
+| `app/audit.py` | Registrar creación, edición, eliminación y cambio de estado. |
+| `app/config.py` | Configuración, incluida la dirección pública de juegos. |
+
+Conservar estas comprobaciones al adaptar el código. Las cuentas y tokens administrativos son distintos de los de pacientes o cuidadores del móvil.
+
+## 4. Juegos: dónde están los archivos
+
+Carpeta: [app/static/juegos]
+
+Contiene **20 juegos**, cada uno con su HTML, estilos, lógica y recursos. `compartido` contiene recursos utilizados por varios juegos.
+
+
+
+
+///////////////////////////////////////////////////
+
+
+Backend de la **Consola de Administración** de AgeCare (Wellq Co).
+FastAPI · Python 3.12 · SQLAlchemy 2 async · PostgreSQL 16 · Alembic.
+
+Para entregar e integrar administración, catálogo y los diez juegos, usar el [README de integración del workspace](../../README.md). Incluye contratos reales, carga sin seed y WebView; el catálogo activo devuelve un array y los estáticos son públicos.
+
+Contiene autenticación de staff con MFA, las cuatro secciones
+analíticas del wireframe (uso comercial, estado operativo, usuarios y soporte,
+uso por funcionalidad) y los módulos de operación (tickets, curación de
+contenido, catálogos del marketplace, moderación, configuración, legales y
+auditoría).
+
+## Arranque rápido (Docker)
+
+```bash
+docker compose up --build
+```
+
+Levanta PostgreSQL, aplica las migraciones sin sembrar datos y sirve la API en
+`http://localhost:8000`. Documentación interactiva (Swagger):
+`http://localhost:8000/api/v1/admin/docs`.
+
+## Arranque manual
+
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+# Crear .env desde ejemplo solo si no existe; conservar secretos de instalaciones existentes.
+alembic upgrade head                  # crea las tablas
+# No ejecutar scripts.seed sobre datos existentes: es destructivo.
+uvicorn app.main:app --reload
+```
+
+Configura ADMIN_DATABASE_URL y las demás variables necesarias antes de ejecutar Alembic. Las migraciones no crean cuentas. En desarrollo puede habilitarse la carga inicial no destructiva descrita arriba; en producción se requiere alta inicial controlada con credenciales propias. No resolverlo ejecutando el seed en una base existente.
+
+## Credenciales demo (seed)
+
+| Correo | Contraseña | Rol |
+|---|---|---|
+| admin@wellq.co.uk | Admin123! | admin |
+| soporte@wellq.co.uk | Soporte123! | soporte |
+| analista@wellq.co.uk | Analista123! | analista |
+| editora@wellq.co.uk | Editora123! | editor |
+
+(El administrador demo debe configurar MFA al primer acceso. Primero configura `ADMIN_ENCRYPTION_KEY` según la guía enlazada más abajo.)
+
+## Probar con curl
+
+```bash
+BASE=http://localhost:8000/api/v1/admin
+
+# Login de un rol sin MFA. Para el administrador utiliza la pantalla de configuración de MFA.
+TOKEN=$(curl -s $BASE/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"analista@wellq.co.uk","password":"Analista123!"}' | python3 -c \
+  'import sys,json;print(json.load(sys.stdin)["access_token"])')
+AUTH="Authorization: Bearer $TOKEN"
+
+# Sección 1 · Uso comercial
+curl -s "$BASE/metrics/commercial/summary?period=current_month" -H "$AUTH"
+curl -s "$BASE/metrics/commercial/registrations?period=last_7_days" -H "$AUTH"
+curl -s "$BASE/metrics/commercial/plans" -H "$AUTH"
+curl -s "$BASE/metrics/commercial/funnel" -H "$AUTH"
+
+# Sección 2 · Estado operativo
+curl -s "$BASE/ops/status" -H "$AUTH"
+curl -s "$BASE/ops/latency?window=1h" -H "$AUTH"
+curl -s "$BASE/ops/incidents?days=30" -H "$AUTH"
+
+# Sección 3 · Usuarios y soporte
+curl -s "$BASE/metrics/roles/summary" -H "$AUTH"
+curl -s "$BASE/metrics/roles/weekly-active?weeks=8" -H "$AUTH"
+curl -s "$BASE/support/summary" -H "$AUTH"
+curl -s "$BASE/support/tickets?status=open" -H "$AUTH"
+
+# Sección 4 · Uso por funcionalidad
+curl -s "$BASE/metrics/features/adoption?days=30" -H "$AUTH"
+curl -s "$BASE/metrics/features/alerts?threshold=0.15" -H "$AUTH"
+```
+
+## Tests
+
+```bash
+pytest            # SQLite en memoria: autenticación, cuentas, invitaciones/MFA, métricas y auditoría
+```
+
+La suite corre sobre SQLite en memoria (sin PostgreSQL) gracias a tipos
+portables; el despliegue real usa PostgreSQL vía `ADMIN_DATABASE_URL`.
+
+## Auditoría de cambios
+
+### Cuentas de la consola
+
+El rol admin gestiona cuentas con GET/POST `/api/v1/admin/users` y PATCH/DELETE `/api/v1/admin/users/{id}`. El listado admite `q`, `role`, `is_active`, `page` y `page_size`. La edición incluye nombre, correo, rol y estado. Se validan los dominios autorizados y correos duplicados.
+
+La pantalla crea cuentas por invitación: POST sin contraseña crea una cuenta pendiente y encola un correo transaccional. SMTP y la clave de cifrado deben estar configurados. El titular elige la contraseña y confirma su autenticador antes de activar la cuenta. Por compatibilidad, POST conserva el campo opcional `password` para integraciones anteriores, pero la política de MFA se exige igualmente antes del acceso. Una cuenta pendiente no puede activarse mediante PATCH.
+
+No se permite eliminar/desactivar la cuenta autenticada ni cambiar su propio rol, y se conserva al menos un administrador activo. DELETE elimina sesiones, invitaciones y configuraciones pendientes y conserva la auditoría. Una edición sin cambios no genera eventos. Esta ampliación requiere la migración `0002`: `alembic upgrade head`. Consulta [la guía de configuración y endpoints](docs/invitaciones-mfa.md). Pruebas: `pytest tests/test_staff.py tests/test_invitations_mfa.py tests/test_security_migration.py`.
+
+Sistema → Auditoría está disponible para el rol admin. Registra cambios de negocio confirmados: crear, editar, eliminar, publicar, aprobar y activar o desactivar registros. No registra consultas, clics, navegación, controles de juegos ni operaciones técnicas de sesión.
+
+Los cambios de juegos incluyen usuario, fecha y valores antes/después. Guardar un juego sin modificar datos no genera eventos. La auditoría se guarda en la misma transacción que el cambio: si se revierte la operación, también se revierte el evento.
+
+GET /api/v1/admin/audit-log permite buscar y filtrar por usuario, acción, entidad y fechas, con paginación. GET /api/v1/admin/audit-log/export exporta hasta 5000 cambios. Ambas operaciones exigen rol admin. La vista y el CSV usan descripciones en español y nombres de módulos y registros, sin rutas HTTP. Los antiguos eventos de clics, solicitudes y autenticación quedan ocultos, sin borrarlos de la base de datos. El endpoint audit-events fue retirado.
+
+No requiere migración. Se enmascaran credenciales y se protegen las celdas CSV contra fórmulas. Pruebas: pytest tests/test_audit.py. En Windows se incluye tzdata para America/Santiago.
+## Estructura
+
+```
+app/
+  config.py        Configuración (pydantic-settings, prefijo ADMIN_)
+  database.py      Engine async + sesión por petición
+  errors.py        Formato estándar de error {error:{code,message,details,request_id}}
+  enums.py         Enumeraciones y matriz de permisos por rol
+  security.py      Argon2id, JWT (access 15 min / refresh 12 h rotatorio), TOTP
+  deps.py          get_current_admin, require(módulo, write=…)
+  audit.py         Escritura de audit_log con enmascarado de campos sensibles
+  periods.py       Resolución de PeriodKey en America/Santiago + buckets
+  models.py        Tablas: staff, agregadas de métricas, ops, tickets, contenido,
+                   marketplace, moderación, settings, legales, audit_log
+  schemas/         Esquemas Pydantic por módulo
+  routers/         Un router por módulo (prefijo común /api/v1/admin)
+alembic/           Migración inicial
+scripts/seed.py    Datos demo coherentes con el wireframe de la consola
+tests/             pytest + httpx (asyncio)
+```
+
+## Decisiones de implementación
+
+- **Estrategia mixta de datos**: los endpoints analíticos leen tablas agregadas
+  (`metrics_daily_users`, `metrics_plan_snapshot`, `role_activity_window`,
+  `feature_usage_window`, `ops_latency_window`…) que en producción alimentan
+  jobs; el seed las puebla directamente. El estado operativo se lee de la foto
+  que mantiene el monitor (`ops_component_state`).
+- **En la matriz de adopción, `null` ≠ `0.0`**: null = la función no aplica al
+  rol (celda gris); 0.0 = disponible pero sin uso.
+- **Refresh tokens rotatorios** con detección de reutilización: reusar un token
+  rotado revoca todas las sesiones del administrador.
+- **Bloqueo optimista** en configuración (`version`) y validación del valor
+  contra el JSON Schema de cada parámetro.
+- **Auditoría de cambios de negocio confirmados**, con
+  campos sensibles enmascarados.
+- Push/webhooks requieren verificar sus integraciones. TTS y pipeline editorial de fase 10 tienen código nuevo, con worker deshabilitado por defecto y validación real pendiente: [contenido-editorial.md](docs/contenido-editorial.md).

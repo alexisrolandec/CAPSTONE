@@ -1,0 +1,118 @@
+"""Sección 7 — Uso por funcionalidad."""
+from fastapi import APIRouter, Query
+from sqlalchemy import select
+
+from app import models
+from app.deps import Db, require
+from app.enums import AppRole
+from app.errors import invalid
+from app.schemas.metrics import (AdoptionAlert, AdoptionOut, AlertsOut, FeatureAdoptionRow, AdoptionCalculation,
+                                 TopByRole, TopFeature, TopOut)
+from app.security import now_utc
+from app.usage_demo import data_through, lock_usage_read
+
+router = APIRouter(prefix="/metrics/features", tags=["Uso por funcionalidad"],
+                   dependencies=[require("metrics")])
+ROLE_ORDER = [AppRole.family, AppRole.caregiver, AppRole.elder, AppRole.doctor]
+
+
+def _check_days(days: int) -> int:
+    if days not in (7, 30, 90):
+        raise invalid("INVALID_RANGE", "La ventana debe ser 7, 30 o 90 días.")
+    return days
+
+
+async def _adoption_map(db, days: int) -> tuple[list[models.Feature], dict, dict, object]:
+    """features ordenadas, uso {(feature, role): users}, activos {role: n}, computed_at."""
+    await lock_usage_read(db)
+    features = (await db.execute(select(models.Feature)
+                                 .order_by(models.Feature.sort_order))).scalars().all()
+    usage_rows = (await db.execute(select(models.FeatureUsageWindow)
+                                   .where(models.FeatureUsageWindow.days_window == days))).scalars().all()
+    active_rows = (await db.execute(select(models.RoleActivityWindow)
+                                    .where(models.RoleActivityWindow.days_window == days))).scalars().all()
+    usage = {(r.feature_key, r.role): r.users for r in usage_rows}
+    active = {r.role: r.active_users for r in active_rows}
+    computed = max((r.computed_at for r in usage_rows), default=now_utc())
+    return features, usage, active, computed
+
+
+def _calculate(usage: dict, active: dict, feature: models.Feature, role: AppRole) -> tuple[float | None, AdoptionCalculation]:
+    """Una única regla para matriz, ranking y alertas; ausencia no equivale a cero."""
+    applicable = role.value in feature.applicable_roles
+    numerator = usage.get((feature.feature_key, role.value))
+    denominator = active.get(role.value)
+    def result(status, reason=None, value=None):
+        return value, AdoptionCalculation(role=role, applicable=applicable, status=status, reason=reason,
+            users=numerator if applicable else None, active_users=denominator if applicable else None)
+    if not applicable:
+        return result('not_applicable', 'not_applicable')
+    if denominator is None:
+        return result('not_calculable', 'missing_active_users')
+    if denominator == 0:
+        return result('not_calculable', 'no_active_users')
+    if denominator < 0:
+        return result('not_calculable', 'invalid_data')
+    if numerator is None:
+        return result('not_calculable', 'missing_usage')
+    if numerator < 0 or numerator > denominator:
+        return result('not_calculable', 'invalid_data')
+    return result('calculated', value=numerator / denominator)
+
+
+# ---------- 7.1 Adoption matrix ----------
+@router.get("/adoption", response_model=AdoptionOut)
+async def adoption(db: Db, days: int = Query(default=30)):
+    days = _check_days(days)
+    features, usage, active, computed = await _adoption_map(db, days)
+    matrix = []
+    for feature in features:
+        cells = [_calculate(usage, active, feature, role) for role in ROLE_ORDER]
+        matrix.append(FeatureAdoptionRow(feature_key=feature.feature_key, name=feature.name,
+            adoption=[value for value, _ in cells], calculation_details=[details for _, details in cells]))
+    return AdoptionOut(
+        data_through=await data_through(db),
+        days=days, roles=ROLE_ORDER,
+        features=matrix,
+        computed_at=computed)
+
+
+# ---------- 7.2 Top per role ----------
+@router.get("/top", response_model=TopOut)
+async def top(db: Db, days: int = Query(default=30), limit: int = Query(default=1, ge=1, le=5)):
+    days = _check_days(days)
+    features, usage, active, computed = await _adoption_map(db, days)
+    out = []
+    for role in ROLE_ORDER:
+        scored = [(f, _calculate(usage, active, f, role)[0]) for f in features]
+        scored = [(f, s) for f, s in scored if s is not None]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        out.append(TopByRole(role=role,
+                             features=[TopFeature(feature_key=f.feature_key, name=f.name, adoption=s)
+                                       for f, s in scored[:limit]]))
+    return TopOut(top_by_role=out, computed_at=computed, data_through=await data_through(db))
+
+
+# ---------- 7.3 Adoption alerts ----------
+@router.get("/alerts", response_model=AlertsOut)
+async def alerts(db: Db, days: int = Query(default=30),
+                 threshold: float = Query(default=0.15)):
+    days = _check_days(days)
+    if not 0.01 <= threshold <= 0.5:
+        raise invalid("INVALID_THRESHOLD", "El umbral debe estar entre 0.01 y 0.5.")
+    features, usage, active, computed = await _adoption_map(db, days)
+    result = []
+    for f in features:
+        low_roles, low_values = [], []
+        for role in ROLE_ORDER:
+            rate, _ = _calculate(usage, active, f, role)
+            if rate is not None and rate < threshold:
+                low_roles.append(role)
+                low_values.append(rate)
+        if low_roles:
+            result.append(AdoptionAlert(feature_key=f.feature_key, name=f.name,
+                                        roles=low_roles, adoption=low_values,
+                                        expected_low=f.expected_low, note=f.note))
+    # las de emergencia (expected_low) al final
+    result.sort(key=lambda a: (a.expected_low, min(a.adoption)))
+    return AlertsOut(threshold=threshold, alerts=result, computed_at=computed, data_through=await data_through(db))
